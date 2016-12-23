@@ -2,6 +2,10 @@
 title: "Pragmatic reasoning and word learning"
 author: "Mika Braginsky"
 output:
+  html_document:
+    theme: cosmo
+    toc: yes
+    toc_float: yes
   html_notebook:
     theme: cosmo
     toc: yes
@@ -25,11 +29,11 @@ knitr::opts_chunk$set(message = FALSE, warning = FALSE, tidy = FALSE,
 
 # Overview
 
-What role does pragmatic reasoning play in word learning? As a child interacts with the world and acquires their native language, they need to figure out both what words mean in general (semantics) and what they mean in a specific context (pragmatics). A number of models have explored how a learner might accomplish each of these tasks on their own: cross-situational word learning models build a lexicon from observed data, while pragmatic reasoning models use an assumed lexicon to make inferences about intended meanings in context. To build a learner that can solve both problems jointly, a model would need to encode uncertainty over the lexicon and combine the mechanisms of word learning and pragmatic reasoning to both learn a lexicon and infer contextual meaning.
+What role does pragmatic reasoning play in word learning? As a child interacts with the world and acquires their native language, they need to figure out both what words mean in general (semantics) and what they mean in a specific contexts (pragmatics). A number of models have explored how a learner might accomplish each of these tasks independently: cross-situational word learning models build a lexicon from observed data, while pragmatic reasoning models use an assumed lexicon to make inferences about intended meanings in context. To build a learner that can solve both problems jointly, a model would need to encode uncertainty over the lexicon and combine the mechanisms of word learning and pragmatic reasoning to both learn a lexicon and infer contextual meaning.
 
-One model that attempts this combination is [Smith 2013](https://papers.nips.cc/paper/4929-learning-and-using-language-via-recursive-pragmatic-reasoning-about-other-agents.pdf). In this framework, speakers and listeners are modeled as not knowing a lexicon, but assuming that a conventional lexicon exists and that others know this lexicon. These assumptions avoid the exponential complexity of propagating uncertainty over lexica through levels of reasoning about others. Simulations using this model capture phenomena from word learning, pragmatic reasoning, and their interaction.
+One model that attempts this combination is [Smith 2013](https://papers.nips.cc/paper/4929-learning-and-using-language-via-recursive-pragmatic-reasoning-about-other-agents.pdf). In this framework, speakers and listeners are modeled as not starting off knowing a lexicon, but assuming that a conventional lexicon exists and that others know this lexicon. These assumptions avoid the exponential complexity of propagating uncertainty over lexica through levels of reasoning about others and allow the model to use the machinery of pragmatic inference to infer probable lexica given observed data. Simulations using this model capture phenomena from word learning, pragmatic reasoning, and their interaction.
 
-This project is a re-implementation of the Smith 2013 model and an attempt to replicate its simulation results, some of which turn out very similar to the original results, while others are not -- it remains to be seen whether the source of these discrepancies lies in the mathematical structure of the models, their implementational specifics, the setup of the simulations, or something else.
+This project is a re-implementation of the Smith 2013 model and an attempt to replicate its simulation results, some of which turn out very similar to the original results, while others do not --- it remains to be seen whether the sources of these discrepancies lie in the mathematical structure of the models, their implementational specifics, the setup of the simulations, or something else.
 
 
 # Model
@@ -38,7 +42,7 @@ This project is a re-implementation of the Smith 2013 model and an attempt to re
 
 The foundation of the model is the Rational Speech Acts (RSA) framework, in which speakers and listeners reason about each other recursively. The recursion grounds out in a literal listener $L_0$, who interprets a word $w$ using their prior over objects $o$ and the entry for the word in their lexicon $\mathcal{L}$:
 
-$$ L_0(w|o,\mathcal{L}) \propto \mathcal{L}(o,w) \cdot \text{prior}(o)$$
+$$ L_0(w|o,\mathcal{L}) \propto \mathcal{L}(o,w) \cdot P(o)$$
 
 ```{r}
 # log probability of object given word and lexicon
@@ -71,7 +75,7 @@ speaker_n <- function(n, lexicon, params) {
 
 A pragmatic listener, in turn, uses Bayes' rule to in invert the speaker's decision rule:
 
-$$ L_n(o|w,\mathcal{L}) \propto S_{n-1}(w|o,\mathcal{L}) \cdot \text{prior}(o) $$
+$$ L_n(o|w,\mathcal{L}) \propto S_{n-1}(w|o,\mathcal{L}) \cdot P(o) $$
 
 ```{r}
 # level n pragmatic listener's log posterior of object given word and lexicon
@@ -139,8 +143,8 @@ speaker_lexicon_posterior <- function(n, params) {
 
 Since the space of possible lexica is infinite, to compute the expected value of the posterior over lexica we do importance sampling. For each sample:
 
-- sample a lexicon from the importance distribution, a Dirichlet distribution over objects for each word (`lexicon_sample`)
-- compute the probability density of the sampled lexicon under the importance distribution (`lexicon_importance`)
+- sample a lexicon from the importance distribution, a Dirichlet distribution over objects for each word
+- compute the probability density of the sampled lexicon under the importance distribution
 - compute the posterior probability of the sampled lexicon
 - use the ratio of the lexicon's posterior probability to importance probability as its weight
 
@@ -198,7 +202,7 @@ mean_lexicon <- function(lexicon_samples) {
 Each simulation specifies:
 
 - a _world_ (set of all possible words and set of all possible objects)
-- model _parameters_ (prior over objects, prior over lexica, word costs, and rationality greediness $\lambda$) -- these are all assumed to be shared among listener and speaker
+- model _parameters_ (prior over objects, prior over lexica, word costs, and rationality greediness $\lambda$) --- these are all assumed to be shared among listener and speaker
 - [for some simulations] _data_ (listener and speaker's respective sets of observed word-objects pairs)
 
 ```{r}
@@ -217,13 +221,13 @@ default_params <- function(world) {
     # prior over objects
     object_prior = 1 / num_objects %>% rep(num_objects) %>%
       set_names(world$objects),
-
+    
     # log prior over lexica
     lexicon_prior = function(lexicon) 0,
     
     # log cost of words
     word_cost = 0 %>% rep(num_words) %>% set_names(world$words),
-
+    
     # greediness of speaker's choice rule
     lambda = 3
     
@@ -231,7 +235,7 @@ default_params <- function(world) {
 }
 ```
 
-Some simulation helper functions.
+Some helper functions for transformations used across simulations:
 
 ```{r}
 # given a lexicon with truth values for each object and word pair, construct a stochastic lexicon that has normalized noisy probabilities of words referring to each of their truth-conditionally referential objects
@@ -243,7 +247,18 @@ stochastify_lexicon <- function(lexicon, noise = 0.01) {
     select(-noisy_true)
 }
 
-# given a literal lexicon and pragmatic agent (listener_n() or speaker_n()), compute that agent's conditional probability of each word given each object (or vice versa)
+# given a lexicon, construct Dirichlet concentration parameters that reflect the truth values of the lexicon
+lexicon_concentrations <- function(lexicon, conc_ratio = 20) {
+  lexicon %>%
+    mutate(conc = true * (conc_ratio - 1) + 1) %>%
+    select(o, w, conc) %>%
+    spread(o, conc) %>%
+    ungroup() %>%
+    select(-w) %>%
+    as.matrix()
+}
+
+# given a lexicon and pragmatic agent (listener_n() or speaker_n()), compute that agent's conditional probability of each word given each object (or vice versa)
 agent_posterior <- function(lexicon, agent) {
   lexicon %>%
     mutate(pragmatic = map2_dbl(o, w, ~exp(agent(.x, .y)))) %>%
@@ -278,7 +293,8 @@ scalar_params <- default_params(scalar_world)
 
 scalar_lexicon <- expand.grid(
   o = scalar_world$objects,
-  w = scalar_world$words
+  w = scalar_world$words,
+  stringsAsFactors = FALSE
 ) %>%
   mutate(true = map2_int(w, o, ~grepl(.x, .y))) %>%
   stochastify_lexicon()
@@ -290,7 +306,7 @@ An $L_2$ listener then interprets each word to give a posterior over objects.
 
 ```{r}
 scalar_interpretation <- agent_posterior(
-  scalar_lexicon,listener_n(2, scalar_lexicon, scalar_params)
+  scalar_lexicon, listener_n(2, scalar_lexicon, scalar_params)
 )
 
 ggplot(scalar_interpretation, aes(x = word, y = p, fill = object)) +
@@ -334,7 +350,7 @@ word_meanings <- list(c(0, 1), c(1, 0), c(1, 1)) %>%
 horn_lexica <- word_meanings %>%
   map(~horn_lexicon %>% mutate(true = .x) %>% stochastify_lexicon)
 
-horn_lexica
+walk(horn_lexica, print)
 ```
 
 The listener and speaker marginalize over lexica to arrive at their pragmatic interpretations and productions, respectively.
@@ -342,8 +358,7 @@ The listener and speaker marginalize over lexica to arrive at their pragmatic in
 ```{r}
 horn_result <- function(agent_type) {
   horn_lexica %>%
-    map(~agent_posterior(.x, agent_type(.x)) %>%
-          select(-true)) %>%
+    map(~agent_posterior(.x, agent_type(.x)) %>% select(-true)) %>%
     reduce(~inner_join(.x, .y, by = c("object", "word", "type"))) %>%
     gather(src, p, -object, -word, -type) %>%
     group_by(object, word, type) %>%
@@ -380,17 +395,10 @@ Both the speaker and listener exhibit a preference to associate cheap words with
 
 ### Learning literal meanings despite scalar implicatures
 
-How can a learner that a less specific term (e.g. _some_) has its general meaning (_some but not all or all_) despite every observed instance of it being pragmatically strengthened to have the more specific meaning (_some but not all_)? This simulation uses the same world setup as the scalar implicature simulation, but instead of a known lexicon, infers the probable lexicon using importance sampling as described above. The prior over lexica associates word `B` with only object `AB` (_all_) but associates word `A` equally with objects `A` and `AB` (_some_). The observed data consists of a number of examples of word `B` paired with object `AB` (_all_) and word `A` paired with object `A` (pragmatic _some_).
+How can a learner that a less specific term (e.g. _some_) has its general meaning (_some but not all or all_) despite every (or most) observed instance of it being pragmatically strengthened to have the more specific meaning (_some but not all_)? This simulation uses the same world setup as the scalar implicature simulation, but instead of a known lexicon, infers the probable lexicon using importance sampling as described above. The prior over lexica associates word `B` with only object `AB` (_all_) but associates word `A` equally with objects `A` and `AB` (_some_). The observed data consists of a number of examples of word `B` paired with object `AB` (_all_) and word `A` paired with object `A` (pragmatic _some_).
 
 ```{r}
-conc_ratio <- 20
-scalar_lexicon_concentrations <- scalar_lexicon %>%
-  mutate(conc = true * (conc_ratio - 1) + 1) %>%
-  select(o, w, conc) %>%
-  spread(o, conc) %>%
-  ungroup() %>%
-  select(-w) %>%
-  as.matrix()
+scalar_lexicon_concentrations <- lexicon_concentrations(scalar_lexicon)
 scalar_params$lexicon_prior <- function(lexicon)
   lexicon_importance(lexicon, scalar_params, scalar_lexicon_concentrations)
 
@@ -458,21 +466,15 @@ The pragmatic listener interprets the novel word `N` as referring to the novel o
 
 ### Learning new words using old words
 
-With repeated exposure to the same novel word and object pairing, children don't just make on on the fly inference as above, but actually add the association to their lexicon. Similarly, the model infers a lexicon given data in the form of occurrences of word `N` with object `B`.
+With repeated exposure to the same novel word and object pairing, children don't just make an on the fly inference as above, but actually add the association to their lexicon. Similarly, the model can infer a lexicon given data in the form of occurrences of word `N` with object `B`.
 
 ```{r}
-conc_ratio <- 20
-mutex_lexicon_concentrations <- mutex_lexicon %>%
-  mutate(conc = true * (conc_ratio - 1) + 1) %>%
-  select(o, w, conc) %>%
-  spread(o, conc) %>%
-  ungroup() %>%
-  select(-w) %>%
-  as.matrix()
+mutex_lexicon_concentrations <- lexicon_concentrations(mutex_lexicon)
 
 num_examples <- 10
 mutex_data <- transpose(list(object = rep("B", num_examples),
                              word = rep("N", num_examples)))
+
 mutex_listener_samples <- lexicon_importance_samples(
   100, listener_lexicon_posterior(3, mutex_params), mutex_data, mutex_params,
   mutex_lexicon_concentrations
@@ -494,14 +496,14 @@ ggplot(mutex_listener_results, aes(x = word, y = p, fill = object)) +
   ggtitle("Listener")
 ```
 
-After `num_examples` training examples, the listener's lexicon has shifted substantially from a prior in which `N` is equally likely to refer to `A` and `B` to a posterior in which `N` is more likely to refer to `B`.
+After `r num_examples` training examples, the listener's lexicon has shifted  from a prior in which `N` is equally likely to refer to `A` and `B` to a posterior in which `N` is more likely to refer to `B`.
 
 
 ## Conventionalization
 
 ### Emergence of novel & efficient lexica
 
-Without any agreed upon word-object mappings, pragmatically reasoning agents can converge on a novel conventional lexicon.
+Without any agreed upon word-object mappings, pragmatically reasoning agents can converge on a novel conventional lexicon. To model this, we construct a simulation of two agent playing a reference game in which the speaker and listener both start with a uniform prior over lexica and iteratively update their posterior over lexica. At each dialog turn, the speaker is randomly assigned a target object and samples a word to utter from their distribution of words given the target object, and the listener then samples an object to interpret the word from their distribution of objects given the uttered word. The speaker and listener then both infer a probable lexicon from the referent pairs they have observed --- uttered words and inferred objects for the speaker and uttered words and target objects for the listener.
 
 ```{r}
 # use importance sampling to infer listener's lexicon given data
@@ -568,7 +570,7 @@ dialog_turn <- function(turn_info, world, params, concentrations,
   }
   listener_lexicon <- update_listener_lexicon(listener_data, params,
                                               concentrations, num_samples)
-
+  
   list(lexica = list(speaker = speaker_lexicon, listener = listener_lexicon),
        data = list(speaker = speaker_data, listener = listener_data))
 }
@@ -586,7 +588,11 @@ dialog_simulation <- function(num_turns, start_lexicon, world, params,
   }
   return(turns)
 }
+```
 
+Some helper functions to transform simulation data:
+
+```{r}
 # extract the lexica over turns of a dialog
 dialog_lexica <- function(turns) {
   
@@ -615,10 +621,13 @@ p_understands <- function(lexica, params) {
         log(params$object_prior[[o]]) +
           speaker_n(1, speaker_lexicon, params)(o, w) +
           listener_n(2, listener_lexicon, params)(o, w)
-      }) %>% exp() %>% sum()
+      }
+      ) %>% exp() %>% sum()
     })
 }
 ```
+
+Some helper functions to plot simulation data:
 
 ```{r}
 plot_dialog_lexica <- function(dialog_lexica) {
@@ -644,7 +653,7 @@ plot_dialog_understanding <- function(dialog_lexica, params) {
 }
 ```
 
-Simulation with two words and two objects.
+First, run this dialog simulation with two words and two objects.
 
 ```{r}
 dialog_world_2 <- list(
@@ -675,7 +684,9 @@ plot_dialog_lexica(dialog_lexica_2)
 plot_dialog_understanding(dialog_lexica_2, dialog_params_2)
 ```
 
-Simulation with three words and three objects.
+Though they both start with no knowledge of the lexicon, the listener and speaker end up with similar lexica that are sparse (i.e. close to a one-to-one mapping between words and objects). The probability that the listener understands the speaker (marginalized over all possible target objects and words), increases over the course of the dialog, though in this run at least it doesn't seem to reach near 1, unlike in the Smith 2013 results.
+
+Second, run this dialog simulation with three words and three objects.
 
 ```{r}
 dialog_world_3 <- list(
@@ -707,10 +718,12 @@ plot_dialog_lexica(dialog_lexica_3 %>% filter(i > 10))
 plot_dialog_understanding(dialog_lexica_3, dialog_params_3)
 ```
 
+With three words and three objects, the agents doesn't seem to be converging on common lexicon that allows for a high probability of mutual understanding (unlike in Smith 2013, where they do).
+
 
 ### Lexicalization of Horn implicatures
 
-Simulation with two words and two objects, with a common and a rare object and an expensive and a cheap word.
+The novel lexicon conventionalized by interlocutors agents isn't random, but rather reflects their biases towards efficiency. To model this, we simulate a dialog between two ignorant agents as above, but in the Horn implicature world where out of two words and two objects, one object is common and one is rare, and one word is expensive and one is cheap.
 
 ```{r}
 num_objects <- length(horn_world$objects)
@@ -735,3 +748,9 @@ horn_plot + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```{r}
 plot_dialog_understanding(dialog_lexica_horn, horn_params)
 ```
+
+As above, the speaker and listener arrive at a sparse lexicon such that they are more likely than chance to understand each other. But the structure of this lexicon isn't arbitrary --- they are more likely to converge on the lexicon associating the cheap word with the common object, reflecting the bias to do so from pragmatic reasoning becoming lexicalized.
+
+# Summary
+
+Overall, this model succesfully captures many phenomena of pragmatic reasoning and word learning: scalar implicature, Horn implicature, scalar term learning, mutual exclusivity, conventionalization, and lexicalization of Horn implicature. However, the simulation results of this re-implementation seem to differ from Smith 2013 in that here the Horn implicature biases are weaker and the dialog simulations have less strong converge to a shared lexicon (including little convergence for the three-object and three-world case). Possible reasons for these discrepancies include bugs in either or both implementations; differences in the specifics of how various calculations are done, inference is structured, and simulations are set up in the two; and lack of mathematical equivalence between them. Further testing will need to be conducted to determine which of these is in fact the case.
