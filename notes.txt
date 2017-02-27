@@ -1,0 +1,5 @@
+speaker and listener's 2x2 (wxo) lexicon likelihood
+
+inferences based on what's in common ground
+saying X implicates that it's not in common ground?
+connects to presupposition accomodation

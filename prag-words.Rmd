@@ -22,6 +22,7 @@ library(tidyr)
 library(DirichletReg)
 library(ggplot2)
 library(langcog)
+library(foreach)
 theme_set(theme_mikabr(base_family = "Source Sans Pro"))
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, tidy = FALSE,
                       cache = TRUE)
@@ -578,6 +579,7 @@ dialog_turn <- function(turn_info, world, params, concentrations,
 # simulate entire dialog
 dialog_simulation <- function(num_turns, start_lexicon, world, params,
                               concentrations, num_samples) {
+  print("Running dialog simulation...")
   start_lexica <- list(speaker = start_lexicon, listener = start_lexicon)
   start_data <- list(speaker = NULL, listener = NULL)
   turns <- list(list(lexica = start_lexica, data = start_data))
@@ -594,23 +596,26 @@ Some helper functions to transform simulation data:
 
 ```{r}
 # extract the lexica over turns of a dialog
-dialog_lexica <- function(turns) {
+dialog_lexica <- function(turns, params) {
   
   speaker_lexica <- 1:length(turns) %>%
-    map_df(~turns[[.x]]$lexica$speaker %>% mutate(i = .x, role = "speaker"))
+    map_df(~turns[[.x]]$lexica$speaker %>%
+             mutate(turn = .x, role = "speaker"))
   
   listener_lexica <- 1:length(turns) %>%
-    map_df(~turns[[.x]]$lexica$listener %>% mutate(i = .x, role = "listener"))
+    map_df(~turns[[.x]]$lexica$listener %>%
+             mutate(turn = .x, role = "listener"))
   
-  bind_rows(speaker_lexica, listener_lexica)
-}
+  bind_rows(speaker_lexica, listener_lexica) %>%
+#}
 
 # calculate probability that listener understands speaker at each dialog turn
-p_understands <- function(lexica, params) {
-  lexica %>%
+#p_understands <- function(lexica, params) {
+#  lexica %>%
     spread(role, p) %>%
-    split(.$i) %>%
-    map_dbl(function(turn_lexica) {
+    group_by(turn) %>%
+    nest() %>%
+    mutate(understands = map_dbl(data, function(turn_lexica) {
       map_dbl(1:nrow(turn_lexica), function(i) {
         o <- turn_lexica$o[i]
         w <- turn_lexica$w[i]
@@ -624,6 +629,8 @@ p_understands <- function(lexica, params) {
       }
       ) %>% exp() %>% sum()
     })
+    ) %>%
+    unnest()
 }
 ```
 
@@ -632,7 +639,7 @@ Some helper functions to plot simulation data:
 ```{r}
 plot_dialog_lexica <- function(dialog_lexica) {
   ggplot(dialog_lexica, aes(x = w, y = o)) +
-    facet_grid(role ~ i) +
+    facet_grid(role ~ turn) +
     coord_equal() +
     geom_raster(aes(fill = p)) +
     scale_fill_gradient(low = "#fdf6e3", high = "#002b36", limits = c(0, 1),
@@ -643,10 +650,10 @@ plot_dialog_lexica <- function(dialog_lexica) {
 
 plot_dialog_understanding <- function(dialog_lexica, params) {
   understands <- data_frame(
-    i = unique(dialog_lexica$i),
+    turn = unique(dialog_lexica$turn),
     p = p_understands(dialog_lexica, params)
   )
-  ggplot(understands, aes(x = i, y = p)) +
+  ggplot(understands, aes(x = turn, y = p)) +
     geom_line() +
     ylim(c(0, 1)) +
     labs(x = "Dialog turn", y = "P(L understands S)")
@@ -673,7 +680,7 @@ start_lexicon <- expand.grid(
 
 dialog_2 <- dialog_simulation(10, start_lexicon, dialog_world_2,
                               dialog_params_2, dialog_concentrations, 200)
-dialog_lexica_2 <- dialog_lexica(dialog_2)
+dialog_lexica_2 <- dialog_lexica(dialog_2, dialog_params_2)
 ```
 
 ```{r}
@@ -685,6 +692,41 @@ plot_dialog_understanding(dialog_lexica_2, dialog_params_2)
 ```
 
 Though they both start with no knowledge of the lexicon, the listener and speaker end up with similar lexica that are sparse (i.e. close to a one-to-one mapping between words and objects). The probability that the listener understands the speaker (marginalized over all possible target objects and words), increases over the course of the dialog, though in this run at least it doesn't seem to reach near 1, unlike in the Smith 2013 results.
+
+```{r}
+num_cores <- parallel::detectCores()
+num_runs <- 20
+num_turns <- 10
+num_samples <- 200
+doParallel::registerDoParallel(cores = num_cores)
+dialog_outputs <- foreach(i = 1:num_runs, .combine = bind_rows) %dopar%
+  (
+    dialog_simulation(num_turns, start_lexicon, dialog_world_2,
+                    dialog_params_2, dialog_concentrations,
+                    num_samples) %>%
+      dialog_lexica(dialog_params_2) %>%
+      mutate(run = uuid::UUIDgenerate())
+  )
+
+# dialog_data <- dialog_outputs[2] %>%
+#   map(dialog_lexica, dialog_params_2) %>%
+#   map_df(~.x %>% mutate(run = uuid::UUIDgenerate()))
+
+dialog_summary <- dialog_outputs %>%
+  distinct(run, turn, understands) %>%
+  group_by(turn) %>%
+  summarise(mean_understands = mean(understands))
+```
+
+```{r}
+ggplot(dialog_outputs, aes(x = turn, y = understands)) +
+  geom_line(aes(colour = run)) +
+  geom_line(aes(y = mean_understands), data = dialog_summary, size = 1) +
+  ylim(c(0, 1)) +
+  scale_colour_solarized(guide = FALSE) +
+  labs(x = "Dialog turn", y = "P(L understands S)")
+```
+
 
 Second, run this dialog simulation with three words and three objects.
 
@@ -737,7 +779,7 @@ start_lexicon <- expand.grid(
 
 dialog_horn <- dialog_simulation(10, start_lexicon, horn_world, horn_params,
                                  dialog_concentrations, 200)
-dialog_lexica_horn <- dialog_lexica(dialog_horn)
+dialog_lexica_horn <- dialog_lexica(dialog_horn, horn_params)
 ```
 
 ```{r}
@@ -747,6 +789,42 @@ horn_plot + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```{r}
 plot_dialog_understanding(dialog_lexica_horn, horn_params)
+```
+
+```{r}
+num_cores <- parallel::detectCores()
+num_runs <- 20
+num_turns <- 10
+num_samples <- 200
+doParallel::registerDoParallel(cores = num_cores)
+horn_dialog_outputs <- foreach(i = 1:num_runs, .combine = bind_rows) %dopar%
+  (
+    dialog_simulation(num_turns, start_lexicon, horn_world, horn_params,
+                      dialog_concentrations, num_samples) %>%
+    # dialog_simulation(num_turns, start_lexicon, dialog_world_2,
+    #                 dialog_params_2, dialog_concentrations,
+    #                 num_samples) %>%
+      dialog_lexica(horn_params) %>%
+      mutate(run = uuid::UUIDgenerate())
+  )
+
+# dialog_data <- dialog_outputs[2] %>%
+#   map(dialog_lexica, dialog_params_2) %>%
+#   map_df(~.x %>% mutate(run = uuid::UUIDgenerate()))
+
+horn_dialog_summary <- horn_dialog_outputs %>%
+  distinct(run, turn, understands) %>%
+  group_by(turn) %>%
+  summarise(mean_understands = mean(understands))
+```
+
+```{r}
+ggplot(horn_dialog_outputs, aes(x = turn, y = understands)) +
+  geom_line(aes(colour = run)) +
+  geom_line(aes(y = mean_understands), data = horn_dialog_summary, size = 1) +
+  ylim(c(0, 1)) +
+  scale_colour_solarized(guide = FALSE) +
+  labs(x = "Dialog turn", y = "P(L understands S)")
 ```
 
 As above, the speaker and listener arrive at a sparse lexicon such that they are more likely than chance to understand each other. But the structure of this lexicon isn't arbitrary --- they are more likely to converge on the lexicon associating the cheap word with the common object, reflecting the bias to do so from pragmatic reasoning becoming lexicalized.
